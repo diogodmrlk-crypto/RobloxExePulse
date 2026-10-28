@@ -1,0 +1,159 @@
+name: Build Luau Executor
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-dylib:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Create source files
+        run: |
+          cat > LuaBridge.h << 'EOF'
+#ifndef LuaBridge_h
+#define LuaBridge_h
+
+#include <lua.hpp>
+#include <string>
+
+class LuaBridge {
+public:
+    LuaBridge();
+    ~LuaBridge();
+    void execute(const std::string& script);
+    void print(const std::string& message);
+private:
+    lua_State* L;
+};
+
+#endif
+EOF
+
+          cat > LuaBridge.cpp << 'EOF'
+#include "LuaBridge.h"
+#include <iostream>
+
+LuaBridge::LuaBridge() {
+    L = lua_newstate(lua_Alloc, nullptr);
+    lua_stdin_is_tty(L);
+}
+
+LuaBridge::~LuaBridge() {
+    lua_close(L);
+}
+
+void LuaBridge::execute(const std::string& script) {
+    lua_State* L = this->L;
+    int status = luaL_loadstring(L, script.c_str());
+    if (status == LUA_OK) {
+        lua_pcall(L, 0, 0, 0);
+    } else {
+        std::string error = lua_tostring(L, -1);
+        print("Error: " + error);
+    }
+}
+
+void LuaBridge::print(const std::string& message) {
+    // Output to console for debugging
+    std::cout << message << std::endl;
+}
+EOF
+
+          cat > main.cpp << 'EOF'
+#include "LuaBridge.h"
+#include <iostream>
+#include <UIKit/UIKit.h>
+
+// External Swift UI function
+void showSwiftUI();
+
+int main(int argc, char * argv[]) {
+    @autoreleasepool {
+        // Initialize the bridge
+        LuaBridge* bridge = new LuaBridge();
+        
+        // Execute a test script
+        bridge->execute("print('Hello from Luau!')");
+        
+        // Show SwiftUI interface
+        showSwiftUI();
+    }
+    return 0;
+}
+EOF
+
+          cat > ExecutorUI.swift << 'EOF'
+import SwiftUI
+
+struct ExecutorUI: View {
+    @State private var script = ""
+    
+    var body: some View {
+        VStack {
+            TextEditor(text: $script)
+                .frame(height: 200)
+                .background(Color.black.opacity(0.5))
+                .cornerRadius(10)
+            
+            HStack {
+                Button("Paste") { /* Logic to paste */ }
+                Button("Delete") { script = "" }
+                Button("Save") { /* Logic to save */ }
+                Button("Load") { /* Logic to load */ }
+            }
+            
+            Button("Execute") {
+                // Bridge to C++ to execute the script
+                print("Executing script: \(script)")
+            }
+            .buttonStyle(.borderedProminent)
+            
+            Button("Close/Hide") {
+                // Logic to hide UI
+            }
+        }
+        .padding()
+    }
+}
+
+struct ExecutorUI_Previews: PreviewProvider {
+    static var previews: some View {
+        ExecutorUI()
+    }
+}
+EOF
+
+          cat > ExecutorUI.mm << 'EOF'
+#import <UIKit/UIKit.h>
+#import <SwiftUI/SwiftUI.h>
+
+void showSwiftUI() {
+    // This is a simplified way to show SwiftUI from C++
+    // In practice, you'd need more setup to embed SwiftUI in a UIKit app
+    UIViewController* rootVC = [[UIViewController alloc] init];
+    [rootVC.view addSubview:ExecutorUI().view];
+    [[UIApplication sharedApplication].keyWindow.rootViewController presentViewController:rootVC animated:YES completion:nil];
+}
+EOF
+
+      - name: Compile
+        run: |
+          clang++ -shared -o libexecutor.dylib \
+            -I/usr/local/include \
+            -L/usr/local/lib \
+            -luau \
+            LuaBridge.cpp main.cpp ExecutorUI.mm
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: dylib-artifact
+          path: libexecutor.dylib
+
+https://notrack.ai/
